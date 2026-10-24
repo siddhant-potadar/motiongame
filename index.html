@@ -3,29 +3,69 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Romp Mini - Motion Smasher</title>
+  <title>Romp - Motion Arcade Hub</title>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
   <style>
-    body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+    body { margin: 0; overflow: hidden; background: #050510; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
     canvas { display: block; width: 100vw; height: 100vh; object-fit: cover; }
     video { display: none; }
-    #ui {
-      position: absolute; top: 15px; left: 20px; color: #fff;
-      font-size: 26px; font-weight: bold; text-shadow: 2px 2px 8px #000;
-      pointer-events: none; z-index: 10;
+    
+    /* Menu Screen Styling */
+    #menuScreen {
+      position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+      background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      z-index: 50; color: #fff;
     }
-    #startBtn {
-      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      padding: 18px 36px; font-size: 22px; font-weight: bold; color: #fff;
-      background: #ff0055; border: none; border-radius: 50px; cursor: pointer;
-      box-shadow: 0 0 20px #ff0055; z-index: 20;
+    h1 { font-size: 38px; margin-bottom: 10px; text-shadow: 0 0 20px #00f3ff; letter-spacing: 2px; }
+    p { font-size: 16px; color: #aaa; margin-bottom: 30px; }
+    .menu-buttons { display: flex; gap: 20px; }
+    .menu-btn {
+      padding: 20px 35px; font-size: 20px; font-weight: bold; color: #fff;
+      border: none; border-radius: 15px; cursor: pointer; box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .menu-btn:active { transform: scale(0.95); }
+    #fruitBtn { background: linear-gradient(135deg, #ff007f, #7f00ff); box-shadow: 0 0 20px rgba(255,0,127,0.5); }
+    #runnerBtn { background: linear-gradient(135deg, #00c6ff, #0072ff); box-shadow: 0 0 20px rgba(0,198,255,0.5); }
+
+    /* In-Game HUD */
+    #hud {
+      position: absolute; top: 15px; left: 20px; color: #fff;
+      font-size: 22px; font-weight: bold; text-shadow: 2px 2px 6px #000;
+      display: none; z-index: 10; pointer-events: none;
+    }
+    #backBtn {
+      position: absolute; top: 15px; right: 20px; padding: 10px 20px;
+      font-size: 16px; font-weight: bold; background: #ff3333; color: #fff;
+      border: none; border-radius: 8px; cursor: pointer; display: none; z-index: 20;
+    }
+    #actionText {
+      position: absolute; bottom: 20px; width: 100%; text-align: center;
+      color: #00ffcc; font-size: 24px; font-weight: bold; text-shadow: 2px 2px 8px #000;
+      display: none; z-index: 10; pointer-events: none;
     }
   </style>
 </head>
 <body>
-  <div id="ui">Score: <span id="score">0</span> | Lives: <span id="lives">3</span></div>
-  <button id="startBtn" onclick="initGame()">START CAMERA GAME</button>
+
+  <!-- Arcade Main Menu -->
+  <div id="menuScreen">
+    <h1>🎮 ROMP ARCADE HUB</h1>
+    <p>Select a game to launch motion tracking on your phone</p>
+    <div class="menu-buttons">
+      <button class="menu-btn" id="fruitBtn" onclick="startFruitNinja()">🍉 Fruit Ninja</button>
+      <button class="menu-btn" id="runnerBtn" onclick="startRunner()">🏃‍♂️ Body Runner</button>
+    </div>
+  </div>
+
+  <!-- Shared Game UI -->
+  <div id="hud">Score: <span id="score">0</span> | <span id="statLabel">Status</span>: <span id="statValue">3</span></div>
+  <button id="backBtn" onclick="returnToMenu()">🚪 Menu</button>
+  <div id="actionText"></div>
+
   <video id="webcam" playsinline></video>
   <canvas id="gameCanvas"></canvas>
 
@@ -33,12 +73,32 @@
 const video = document.getElementById('webcam');
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
+const menuScreen = document.getElementById('menuScreen');
+const hud = document.getElementById('hud');
+const backBtn = document.getElementById('backBtn');
 const scoreEl = document.getElementById('score');
-const livesEl = document.getElementById('lives');
+const statLabel = document.getElementById('statLabel');
+const statValue = document.getElementById('statValue');
+const actionText = document.getElementById('actionText');
 
-let score = 0, lives = 3, gameRunning = false;
-let handPositions = [];
-let targets = [];
+let currentActiveGame = null; // 'fruit' or 'runner'
+let score = 0, lives = 3, missed = 0;
+let cameraInstance = null;
+
+// Fruit Ninja Variables
+let fruits = [];
+let trail = [];
+const fruitTypes = [
+  { name: 'Watermelon', color: '#ff2a5f', radius: 45 },
+  { name: 'Banana', color: '#ffd100', radius: 35 },
+  { name: 'Apple', color: '#00ff66', radius: 40 },
+  { name: 'Bomb', color: '#333333', radius: 38, isBomb: true }
+];
+
+// Runner Variables
+let playerLane = 1;
+let obstacles = [];
+let calibrationX = null;
 
 function resize() {
   canvas.width = window.innerWidth;
@@ -47,125 +107,214 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
-// Spawn targets (Green orbs = Hit, Red bombs = Avoid)
-function spawnTarget() {
-  if (!gameRunning) return;
-  const isBomb = Math.random() < 0.22;
-  targets.push({
-    x: Math.random() * (canvas.width - 100) + 50,
-    y: -40,
-    radius: isBomb ? 32 : 38,
-    speed: Math.random() * 3.5 + 3.5,
-    isBomb: isBomb,
-    color: isBomb ? '#ff2222' : '#00ffcc'
-  });
-  setTimeout(spawnTarget, Math.max(400, 1100 - score * 8));
-}
-
-const hands = new Hands({
-  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-});
-hands.setOptions({
-  maxNumHands: 2,
-  modelComplexity: 0, // 0 = Lite mode for fast 30-60 FPS on Galaxy F23
-  minDetectionConfidence: 0.5,
-  minTrackingConfidence: 0.5
-});
+// ==================== FRUIT NINJA MODE ====================
+const hands = new Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+hands.setOptions({ maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
 
 hands.onResults((results) => {
-  ctx.save();
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (currentActiveGame !== 'fruit') return;
+  drawCameraFeed(results.image);
 
-  // Mirror the camera feed horizontally so movements feel natural
-  ctx.translate(canvas.width, 0);
-  ctx.scale(-1, 1);
-  ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-  ctx.restore();
-
-  handPositions = [];
-  if (results.multiHandLandmarks) {
-    for (const landmarks of results.multiHandLandmarks) {
-      // Landmark 9 is the center of the palm
-      const palm = landmarks[9];
-      const hx = (1 - palm.x) * canvas.width; // Flipped X to match mirror
-      const hy = palm.y * canvas.height;
-      handPositions.push({ x: hx, y: hy });
-
-      // Draw glowing hand trackers
-      ctx.beginPath();
-      ctx.arc(hx, hy, 42, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255, 230, 0, 0.45)';
-      ctx.fill();
-      ctx.lineWidth = 4;
-      ctx.strokeStyle = '#ffea00';
-      ctx.stroke();
-    }
+  let fingertip = null;
+  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+    const tip = results.multiHandLandmarks[0][8]; // Index tip
+    fingertip = { x: (1 - tip.x) * canvas.width, y: tip.y * canvas.height };
   }
 
-  // Update & draw targets
-  if (gameRunning) {
-    for (let i = targets.length - 1; i >= 0; i--) {
-      let t = targets[i];
-      t.y += t.speed;
+  updateTrail(fingertip);
+  updateAndDrawFruits();
+});
 
-      ctx.beginPath();
-      ctx.arc(t.x, t.y, t.radius, 0, Math.PI * 2);
-      ctx.fillStyle = t.color;
-      ctx.fill();
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = '#ffffff';
-      ctx.stroke();
+function startFruitNinja() {
+  currentActiveGame = 'fruit';
+  score = 0; missed = 0; fruits = []; trail = [];
+  scoreEl.innerText = score; statLabel.innerText = 'Missed'; statValue.innerText = missed;
+  
+  menuScreen.style.display = 'none';
+  hud.style.display = 'block';
+  backBtn.style.display = 'block';
+  actionText.style.display = 'none';
 
-      // Check collision with either hand
+  spawnFruitLoop();
+  startCamera(async () => { await hands.send({ image: video }); });
+}
+
+function spawnFruitLoop() {
+  if (currentActiveGame !== 'fruit') return;
+  const type = fruitTypes[Math.floor(Math.random() * fruitTypes.length)];
+  const x = Math.random() * (canvas.width - 200) + 100;
+  fruits.push({
+    x, y: canvas.height + 50,
+    vx: (canvas.width / 2 - x) * 0.015 + (Math.random() * 4 - 2),
+    vy: -(Math.random() * 5 + 13),
+    radius: type.radius, color: type.color, name: type.name, isBomb: type.isBomb || false, sliced: false, sliceAnim: 0
+  });
+  setTimeout(spawnFruitLoop, Math.max(700, 1500 - score * 10));
+}
+
+function updateTrail(point) {
+  if (point) {
+    trail.push(point);
+    if (trail.length > 8) trail.shift();
+  } else {
+    if (trail.length > 0) trail.shift();
+  }
+
+  if (trail.length > 1) {
+    ctx.beginPath();
+    ctx.moveTo(trail[0].x, trail[0].y);
+    for (let i = 1; i < trail.length; i++) ctx.lineTo(trail[i].x, trail[i].y);
+    ctx.lineWidth = 10; ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(0, 243, 255, 0.85)';
+    ctx.shadowBlur = 15; ctx.shadowColor = '#00f3ff';
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+}
+
+function updateAndDrawFruits() {
+  for (let i = fruits.length - 1; i >= 0; i--) {
+    let f = fruits[i];
+    f.x += f.vx; f.y += f.vy; f.vy += 0.45;
+
+    ctx.save();
+    if (!f.sliced) {
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.radius, 0, Math.PI * 2);
+      ctx.fillStyle = f.color; ctx.fill(); ctx.lineWidth = 4; ctx.strokeStyle = '#fff'; ctx.stroke();
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(f.isBomb ? '💣' : f.name[0], f.x, f.y + 5);
+
       let hit = false;
-      for (const h of handPositions) {
-        const dist = Math.hypot(t.x - h.x, t.y - h.y);
-        if (dist < t.radius + 42) {
-          hit = true;
-          break;
-        }
+      for (const pt of trail) {
+        if (Math.hypot(f.x - pt.x, f.y - pt.y) < f.radius + 10) { hit = true; break; }
       }
 
       if (hit) {
-        if (t.isBomb) {
-          lives--;
-          livesEl.innerText = lives;
-          if (lives <= 0) resetGame();
-        } else {
-          score += 10;
-          scoreEl.innerText = score;
-        }
-        targets.splice(i, 1);
+        if (f.isBomb) { alert('Boom! Game Over. Score: ' + score); returnToMenu(); return; }
+        else { score += 10; scoreEl.innerText = score; f.sliced = true; }
+      }
+
+      if (f.y > canvas.height + 100 && f.vy > 0) {
+        missed++; statValue.innerText = missed; fruits.splice(i, 1);
+        if (missed >= 3) { alert('Game Over! Score: ' + score); returnToMenu(); return; }
         continue;
       }
-
-      if (t.y > canvas.height + 50) {
-        targets.splice(i, 1);
-      }
+    } else {
+      f.sliceAnim += 2;
+      ctx.beginPath(); ctx.arc(f.x - f.sliceAnim, f.y, f.radius * 0.7, 0, Math.PI * 2);
+      ctx.arc(f.x + f.sliceAnim, f.y, f.radius * 0.7, 0, Math.PI * 2);
+      ctx.fillStyle = f.color; ctx.fill();
+      if (f.sliceAnim > 40) fruits.splice(i, 1);
     }
+    ctx.restore();
   }
-});
-
-function resetGame() {
-  gameRunning = false;
-  alert('Game Over! Final Score: ' + score);
-  score = 0; lives = 3; targets = [];
-  scoreEl.innerText = score; livesEl.innerText = lives;
-  document.getElementById('startBtn').style.display = 'block';
 }
 
-function initGame() {
-  document.getElementById('startBtn').style.display = 'none';
-  gameRunning = true;
-  spawnTarget();
+// ==================== BODY RUNNER MODE ====================
+const pose = new Pose({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
+pose.setOptions({ modelComplexity: 0, smoothLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
 
-  const camera = new Camera(video, {
-    onFrame: async () => { await hands.send({ image: video }); },
-    width: 640,
-    height: 480,
-    facingMode: 'user'
+pose.onResults((results) => {
+  if (currentActiveGame !== 'runner') return;
+  drawCameraFeed(results.image);
+
+  if (results.poseLandmarks) {
+    const nose = results.poseLandmarks[0];
+    const nx = (1 - nose.x) * canvas.width;
+    if (calibrationX === null) calibrationX = nx;
+
+    const diff = nx - calibrationX;
+    if (diff < -70) { playerLane = 0; actionText.innerText = "⬅️ LEFT LANE"; }
+    else if (diff > 70) { playerLane = 2; actionText.innerText = "➡️ RIGHT LANE"; }
+    else { playerLane = 1; actionText.innerText = "⬆️ CENTER LANE"; }
+
+    ctx.beginPath(); ctx.arc(nx, nose.y * canvas.height, 15, 0, Math.PI * 2);
+    ctx.fillStyle = '#00ffcc'; ctx.fill();
+  }
+
+  updateAndDrawRunner();
+});
+
+function startRunner() {
+  currentActiveGame = 'runner';
+  score = 0; lives = 3; obstacles = []; calibrationX = null;
+  scoreEl.innerText = score; statLabel.innerText = 'Lives'; statValue.innerText = lives;
+
+  menuScreen.style.display = 'none';
+  hud.style.display = 'block';
+  backBtn.style.display = 'block';
+  actionText.style.display = 'block';
+
+  spawnObstacleLoop();
+  startCamera(async () => { await pose.send({ image: video }); });
+}
+
+function spawnObstacleLoop() {
+  if (currentActiveGame !== 'runner') return;
+  obstacles.push({ lane: Math.floor(Math.random() * 3), y: -100, speed: 7, passed: false });
+  setTimeout(spawnObstacleLoop, 1800);
+}
+
+function updateAndDrawRunner() {
+  const laneWidth = canvas.width / 3;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)T'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(laneWidth, 0); ctx.lineTo(laneWidth, canvas.height);
+  ctx.moveTo(laneWidth * 2, 0); ctx.lineTo(laneWidth * 2, canvas.height); ctx.stroke();
+
+  let playerX = laneWidth * playerLane + laneWidth / 2;
+  let playerY = canvas.height - 150;
+  ctx.beginPath(); ctx.arc(playerX, playerY, 35, 0, Math.PI * 2);
+  ctx.fillStyle = '#ff007f'; ctx.shadowBlur = 20; ctx.shadowColor = '#ff007f'; ctx.fill(); ctx.shadowBlur = 0;
+
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    let obs = obstacles[i];
+    obs.y += obs.speed;
+    let obsX = laneWidth * obs.lane + laneWidth / 2;
+
+    ctx.beginPath(); ctx.rect(obsX - 50, obs.y - 25, 100, 50);
+    ctx.fillStyle = '#ffcc00'; ctx.fill(); ctx.stroke();
+
+    if (!obs.passed && obs.y > playerY - 40 && obs.y < playerY + 40) {
+      if (obs.lane === playerLane) {
+        lives--; statValue.innerText = lives; obs.passed = true;
+        if (lives <= 0) { alert('Crash! Game Over. Score: ' + score); returnToMenu(); return; }
+      }
+    }
+
+    if (!obs.passed && obs.y > canvas.height) {
+      obs.passed = true; score += 10; scoreEl.innerText = score;
+    }
+
+    if (obs.y > canvas.height + 60) obstacles.splice(i, 1);
+  }
+}
+
+// ==================== SHARED UTILS ====================
+function drawCameraFeed(img) {
+  ctx.save();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.translate(canvas.width, 0); ctx.scale(-1, 1);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  ctx.restore();
+}
+
+function startCamera(onFrameCb) {
+  if (cameraInstance) cameraInstance.stop();
+  cameraInstance = new Camera(video, {
+    onFrame: onFrameCb,
+    width: 640, height: 480, facingMode: 'user'
   });
-  camera.start();
+  cameraInstance.start();
+}
+
+function returnToMenu() {
+  currentActiveGame = null;
+  if (cameraInstance) cameraInstance.stop();
+  menuScreen.style.display = 'flex';
+  hud.style.display = 'none';
+  backBtn.style.display = 'none';
+  actionText.style.display = 'none';
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 </script>
 </body>
